@@ -603,8 +603,8 @@ def _migrate_legacy_state_dir() -> None:
 # Resolved at call time so tests can control cwd.
 _LOCAL_CONFIG_RELPATH: Path = Path(".omnigent") / "config.yaml"
 
-# Keys that ``omnigent config`` accepts.  Mirrors the option names in
-# the ``run`` command so the mapping is explicit and auditable.
+# User-facing keys that ``omnigent config`` accepts. Most mirror ``run``
+# options; session-title guidance configures server-owned metadata generation.
 _AUTO_OPEN_CONVERSATION_CONFIG_KEY = "auto_open_conversation"
 _GLOBAL_CONFIG_KEYS: frozenset[str] = frozenset(
     {
@@ -615,6 +615,7 @@ _GLOBAL_CONFIG_KEYS: frozenset[str] = frozenset(
         # ``omni opencode`` TUI launches on; set via `omni setup` → OpenCode.
         "opencode_model",
         "server",
+        "session_title_instructions",
         _AUTO_OPEN_CONVERSATION_CONFIG_KEY,
     }
 )
@@ -4182,7 +4183,8 @@ def server(
         admins=config_str_list(cfg.get("admins")),
         allowed_domains=config_str_list(cfg.get("allowed_domains")),
         sandbox_config=sandbox_config,
-        server_config=cfg,
+        # Without --config, let create_app resolve ~/.omnigent/config.yaml.
+        server_config=cfg if config_path else None,
     )
 
     click.echo(f"Starting omnigent server on {host}:{port}")
@@ -9855,7 +9857,7 @@ def _print_config_defaults() -> None:
 
     :returns: None. Side effect: writes to stdout.
     """
-    # Only the user-facing run defaults (the keys ``config set`` accepts).
+    # Only user-facing defaults (the keys ``config set`` accepts).
     # Internal blocks (``providers``, ``host``, ``tui``) are omitted — the
     # ``providers`` block is shown in the credentials-by-harness section.
     global_cfg = {k: v for k, v in _load_global_config().items() if k in _GLOBAL_CONFIG_KEYS}

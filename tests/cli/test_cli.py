@@ -4701,6 +4701,28 @@ def test_config_set_global_writes_auto_open_conversation_bool(
     assert _resolve_auto_open_conversation_from_config(cfg) is True
 
 
+def test_config_set_global_writes_session_title_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr("omnigent.cli._GLOBAL_CONFIG_PATH", config_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "config",
+            "set",
+            "--global",
+            "session_title_instructions=Prefix titles with the current date.",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert cfg["session_title_instructions"] == "Prefix titles with the current date."
+
+
 def test_config_set_global_reports_effective_config_home(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
