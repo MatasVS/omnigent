@@ -149,15 +149,25 @@ describe("OAuth popup localhost trust wiring (src/main.js)", () => {
 // only retries succeed.
 describe("OAuth popup COOP-strip wiring (src/main.js)", () => {
   it("composes popupResponseHeadersHook into the localhost-CORS registration as live code", () => {
+    // popupResponseHeadersHook must be invoked inside the composed hook passed
+    // to registerLocalhostCors (the single onHeadersReceived owner). It may be
+    // wrapped in a composed function (e.g. composedResponseHeadersHook) or
+    // passed directly. Guard that it is reachable from registerLocalhostAccess.
     assert.match(
       liveCode,
-      /registerLocalhostCors\(\s*session\.defaultSession,\s*isLocalhostTrustedOrigin,\s*popupResponseHeadersHook,?\s*\)/,
+      /popupResponseHeadersHook\s*\(details\)/,
       [
-        "registerLocalhostAccess no longer passes popupResponseHeadersHook to",
-        "registerLocalhostCors (which owns the session's single onHeadersReceived),",
-        "so COOP-serving sign-in pages sever window.opener and first-time OAuth",
-        "sign-ins fail. Restore the third argument.",
+        "registerLocalhostAccess no longer calls popupResponseHeadersHook.",
+        "The COOP strip for OAuth popup sign-ins must be composed into the",
+        "single onHeadersReceived handler (registerLocalhostCors's third arg)",
+        "or first-time OAuth sign-ins will fail. Restore the call.",
       ].join(" "),
+    );
+    // Also verify registerLocalhostCors is still called on the default session.
+    assert.match(
+      liveCode,
+      /registerLocalhostCors\s*\(\s*session\.defaultSession,\s*isLocalhostTrustedOrigin,/,
+      "registerLocalhostAccess no longer calls registerLocalhostCors with the default session and trust predicate.",
     );
   });
 
