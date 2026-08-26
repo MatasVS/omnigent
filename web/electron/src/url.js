@@ -320,7 +320,6 @@
     defaultSchemeFor,
     normalizeUrl,
     isPlainHttpRemote,
-    API_MOUNT_PATH,
     stripApiMountFromServerUrl,
     WORKSPACE_UI_PATH,
     WORKSPACE_PROBE_TIMEOUT_MS,
