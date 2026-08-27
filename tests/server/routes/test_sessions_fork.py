@@ -131,6 +131,13 @@ class _ConversationStore:
         cloned_agent_description: str | None = None,
         copy_model_settings: bool = True,
         copy_terminal_launch_args: bool = True,
+        override_model_override: str | None = None,
+        override_model_override_set: bool = False,
+        override_reasoning_effort: str | None = None,
+        override_reasoning_effort_set: bool = False,
+        override_terminal_launch_args: list[str] | None = None,
+        override_terminal_launch_args_set: bool = False,
+        dropped_label_keys: frozenset[str] = frozenset(),
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -184,6 +191,13 @@ class _ConversationStore:
                 "cloned_agent_description": cloned_agent_description,
                 "copy_model_settings": copy_model_settings,
                 "copy_terminal_launch_args": copy_terminal_launch_args,
+                "override_model_override": override_model_override,
+                "override_model_override_set": override_model_override_set,
+                "override_reasoning_effort": override_reasoning_effort,
+                "override_reasoning_effort_set": override_reasoning_effort_set,
+                "override_terminal_launch_args": override_terminal_launch_args,
+                "override_terminal_launch_args_set": override_terminal_launch_args_set,
+                "dropped_label_keys": dropped_label_keys,
                 "carry_history_into_native": carry_history_into_native,
                 "resume_source_native_session": resume_source_native_session,
                 "presentation_labels": presentation_labels,
@@ -449,6 +463,98 @@ async def test_fork_session_happy_path() -> None:
     assert fork_call["agent_id"] == body["agent_id"], (
         "Fork must bind the same cloned agent id it asked the store to create"
     )
+
+
+@pytest.mark.asyncio
+async def test_fork_session_run_config_overrides_pass_through() -> None:
+    """The dialog's model / effort / launch-args picks reach the store as
+    explicit overrides with their set-flags on.
+
+    Omitting these fields must leave the store on the inherit path
+    (``override_*_set=False``), so the flags gate on the request having sent
+    each field — a regression here would either drop a user's pick or clobber
+    an inherited value the user never touched.
+    """
+    conv = _make_conversation()
+    conv_store = _ConversationStore(conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv})
+    client = TestClient(_build_app(conv_store))
+
+    resp = client.post(
+        "/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork",
+        json={
+            "model_override": "opus",
+            "reasoning_effort": "high",
+            "terminal_launch_args": ["--permission-mode", "auto"],
+        },
+    )
+
+    assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
+    fork_call = conv_store.fork_calls[0]
+    assert fork_call["override_model_override_set"] is True
+    assert fork_call["override_model_override"] == "opus"
+    assert fork_call["override_reasoning_effort_set"] is True
+    assert fork_call["override_reasoning_effort"] == "high"
+    assert fork_call["override_terminal_launch_args_set"] is True
+    assert fork_call["override_terminal_launch_args"] == ["--permission-mode", "auto"]
+    # Explicit launch args ⇒ drop the source's copied mode labels so a stale
+    # permission-mode label can't shadow the freshly chosen mode.
+    assert "omnigent.claude_native.permission_mode" in fork_call["dropped_label_keys"]
+
+
+@pytest.mark.asyncio
+async def test_fork_session_run_config_omitted_inherits() -> None:
+    """A fork with no run-config fields leaves every override unset, so the
+    store keeps today's inherit behavior (and drops no mode labels)."""
+    conv = _make_conversation()
+    conv_store = _ConversationStore(conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv})
+    client = TestClient(_build_app(conv_store))
+
+    resp = client.post("/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork", json={})
+
+    assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
+    fork_call = conv_store.fork_calls[0]
+    assert fork_call["override_model_override_set"] is False
+    assert fork_call["override_reasoning_effort_set"] is False
+    assert fork_call["override_terminal_launch_args_set"] is False
+    assert fork_call["dropped_label_keys"] == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fork_session_run_config_clear_aliases() -> None:
+    """A "default" model/effort (the picker's Default row) reaches the store as
+    a cleared override — set-flag on, value None — resetting the fork to the
+    bound agent's default rather than inheriting the source's."""
+    conv = _make_conversation()
+    conv_store = _ConversationStore(conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv})
+    client = TestClient(_build_app(conv_store))
+
+    resp = client.post(
+        "/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork",
+        json={"model_override": "default", "reasoning_effort": "default"},
+    )
+
+    assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
+    fork_call = conv_store.fork_calls[0]
+    assert fork_call["override_model_override_set"] is True
+    assert fork_call["override_model_override"] is None
+    assert fork_call["override_reasoning_effort_set"] is True
+    assert fork_call["override_reasoning_effort"] is None
+
+
+@pytest.mark.asyncio
+async def test_fork_session_400_invalid_model_override() -> None:
+    """A shell-/flag-shaped model id is rejected before any fork happens."""
+    conv = _make_conversation()
+    conv_store = _ConversationStore(conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv})
+    client = TestClient(_build_app(conv_store))
+
+    resp = client.post(
+        "/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork",
+        json={"model_override": "--rm -rf"},
+    )
+
+    assert resp.status_code == 400, f"got {resp.status_code}: {resp.text}"
+    assert conv_store.fork_calls == [], "No fork should happen on a bad model override"
 
 
 @pytest.mark.asyncio

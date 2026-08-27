@@ -9,6 +9,7 @@ import {
   GitBranchIcon,
   InfoIcon,
   MonitorIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import {
   Dialog,
@@ -30,9 +31,42 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { forkSession, launchRunner } from "@/lib/sessionsApi";
 import { useAvailableAgents, prefetchAvailableAgentDetails } from "@/hooks/useAvailableAgents";
+import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { partitionAgentsByKind } from "@/lib/agentGrouping";
 import { useSessionAgent } from "@/hooks/useAgents";
-import { useHosts, type Host } from "@/hooks/useHosts";
+import { useSession } from "@/hooks/useSession";
+import type { Session } from "@/lib/types";
+import { useHosts, useHostModelOptions, type Host } from "@/hooks/useHosts";
+import {
+  nativeAgentHasCapability,
+  nativeCodingAgentForAvailableAgent,
+  nativeCodingAgentForSession,
+} from "@/lib/nativeCodingAgents";
+import {
+  CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE,
+  CLAUDE_NATIVE_PERMISSION_MODES,
+  claudePermissionModeFromSession,
+} from "@/lib/claudePermissionMode";
+import {
+  AGY_NATIVE_DEFAULT_SKIP_MODE,
+  AGY_NATIVE_SKIP_MODES,
+  AGY_NATIVE_SKIP_VALUE,
+  CODEX_NATIVE_APPROVAL_MODES,
+  CODEX_NATIVE_DEFAULT_APPROVAL_MODE,
+  CURSOR_NATIVE_DEFAULT_EXEC_MODE,
+  CURSOR_NATIVE_EXEC_MODES,
+  type NativeHarnessMode,
+} from "@/lib/nativeHarnessModes";
+import {
+  CLAUDE_NATIVE_EFFORTS,
+  ConfigRow,
+  DescribedSelect,
+  EFFORT_SELECT_NONE,
+  MODEL_SELECT_DEFAULT,
+  RoutingModelSelect,
+  defaultModelLabel,
+  nativeModelLabel,
+} from "@/components/HarnessConfigControls";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
@@ -109,6 +143,322 @@ function splitWorktreePath(workspace: string): { repo: string; branchDir: string
 function defaultForkTitle(sourceTitle: string | null | undefined): string {
   const trimmed = sourceTitle?.trim();
   return trimmed ? `Fork of ${trimmed}` : "";
+}
+
+/**
+ * Ready-to-send run-config overrides from the fork dialog's pickers. An
+ * undefined field is omitted from the fork request; the section reports the
+ * whole value on every change so the form can read it back at submit.
+ */
+export interface ForkRunConfigValue {
+  modelOverride?: string;
+  reasoningEffort?: string;
+  terminalLaunchArgs?: string[];
+}
+
+/**
+ * Model / effort / permission-mode pickers for a fork, mirroring the
+ * new-session dialog's harness-config rows. Only rendered for a NATIVE target
+ * harness (Claude Code / Codex / Pi / Cursor / Antigravity) — SDK and non-coding
+ * targets have no per-session run knobs the fork can express.
+ *
+ * Seeding follows the source's harness: forking to the SAME harness seeds the
+ * pickers from the source session's current model / effort / permission mode
+ * (so an untouched fork continues where the original left off); switching to a
+ * DIFFERENT harness seeds the target harness's own defaults (an unselected
+ * model/effort and the harness's default permission mode), exactly like starting
+ * a fresh session on that harness.
+ *
+ * The section is authoritative: whatever the pickers show is sent explicitly on
+ * submit (a "Default" model/effort rides the clear alias; the permission /
+ * approval / cursor / agy mode rides `terminalLaunchArgs`, `[]` clearing the
+ * source's launch flags). An untouched same-harness fork therefore re-sends the
+ * source's values, which yields the identical result as inheriting them.
+ *
+ * @param targetHarness - Effective target harness key (e.g. "claude-native"),
+ *   or null for a non-native target (the section renders nothing).
+ * @param targetAgent - The `{ name, harness }` the fork will bind, for
+ *   capability detection.
+ * @param sourceSession - Source session, read to seed a same-harness fork.
+ * @param sameHarnessAsSource - Whether the fork keeps the source's harness.
+ * @param selectedHostId - Host whose model catalog feeds the model picker; null
+ *   leaves it on Default until a host is chosen.
+ * @param onChange - Reports the ready-to-send value on every change.
+ */
+function ForkRunConfig({
+  targetHarness,
+  targetAgent,
+  sourceSession,
+  sameHarnessAsSource,
+  selectedHostId,
+  onChange,
+}: {
+  targetHarness: string | null;
+  targetAgent: Pick<AvailableAgent, "name" | "harness">;
+  sourceSession: Session | null;
+  sameHarnessAsSource: boolean;
+  selectedHostId: string | null;
+  onChange: (value: ForkRunConfigValue) => void;
+}) {
+  const hasPermission = nativeAgentHasCapability(targetAgent, "permissionMode");
+  const hasApproval = nativeAgentHasCapability(targetAgent, "approvalMode");
+  const hasCursor = nativeAgentHasCapability(targetAgent, "cursorMode");
+  const hasAgySkip = nativeAgentHasCapability(targetAgent, "skipPermissions");
+  const hasModelPicker = nativeAgentHasCapability(targetAgent, "modelPicker");
+  // Codex resolves its own catalog, so it gets a model row even though it lacks
+  // the modelPicker capability (mirrors the new-session dialog).
+  const isCodex = targetHarness === "codex-native";
+  const showModel = hasModelPicker || isCodex;
+
+  // Live model catalog for the target harness on the picked host. Only the
+  // native harnesses that expose a picker resolve a catalog; others pass a
+  // harmless unused harness key with the query disabled.
+  const catalogHarness = showModel && targetHarness ? targetHarness : "claude-native";
+  const { data: hostModelOptions, isLoading: modelsLoading } = useHostModelOptions(
+    selectedHostId,
+    catalogHarness,
+    showModel && selectedHostId !== null,
+  );
+  const modelOptions = useMemo(
+    () =>
+      (hostModelOptions ?? []).map((option) => ({
+        id: option.id,
+        displayName: option.displayName ?? option.id,
+        isDefault: option.isDefault,
+      })),
+    [hostModelOptions],
+  );
+  const modelSelectOptions = useMemo(
+    () => modelOptions.map((m) => ({ id: m.id, label: nativeModelLabel(m) })),
+    [modelOptions],
+  );
+
+  // Seed each picker: same-harness → the source's current value; switched →
+  // the target harness's default. Recomputed when the target or seeding basis
+  // changes so switching agents re-seeds correctly.
+  const seededModel = useMemo(() => {
+    // Seed the source's model only once the catalog confirms it: a model id
+    // absent from the loaded options has no Select item to land on and would
+    // blank the trigger. Until the catalog resolves, Default holds.
+    const picked = sameHarnessAsSource ? sourceSession?.modelOverride : null;
+    return picked && modelOptions.some((m) => m.id === picked) ? picked : MODEL_SELECT_DEFAULT;
+  }, [sameHarnessAsSource, sourceSession, modelOptions]);
+  const seededEffort = useMemo(() => {
+    // Seed only an effort the picker can display; a source value outside the
+    // offered vocabulary (e.g. "minimal") falls back to Default rather than
+    // leaving the Select on an empty, unselectable value.
+    const effort = sameHarnessAsSource ? sourceSession?.reasoningEffort : null;
+    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort)
+      ? effort
+      : EFFORT_SELECT_NONE;
+  }, [sameHarnessAsSource, sourceSession]);
+  const seededPermission = useMemo(() => {
+    if (sameHarnessAsSource) {
+      return (
+        claudePermissionModeFromSession(sourceSession) ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
+      );
+    }
+    return CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE;
+  }, [sameHarnessAsSource, sourceSession]);
+  const seededModeValue = useMemo(() => {
+    // A same-harness fork of a source launched with a known mode seeds that
+    // mode by matching its launch args; otherwise the harness's default.
+    const source = sameHarnessAsSource ? (sourceSession?.terminalLaunchArgs ?? []) : [];
+    const table: NativeHarnessMode[] = hasApproval
+      ? CODEX_NATIVE_APPROVAL_MODES
+      : hasCursor
+        ? CURSOR_NATIVE_EXEC_MODES
+        : hasAgySkip
+          ? AGY_NATIVE_SKIP_MODES
+          : [];
+    const dflt = hasApproval
+      ? CODEX_NATIVE_DEFAULT_APPROVAL_MODE
+      : hasCursor
+        ? CURSOR_NATIVE_DEFAULT_EXEC_MODE
+        : AGY_NATIVE_DEFAULT_SKIP_MODE;
+    // Match the source's launch args against the mode table (longest args first
+    // so "--mode plan" isn't shadowed by an empty-args default).
+    const match = [...table]
+      .sort((a, b) => b.args.length - a.args.length)
+      .find((m) => m.args.length > 0 && m.args.every((arg) => source.includes(arg)));
+    return match?.value ?? dflt;
+  }, [sameHarnessAsSource, sourceSession, hasApproval, hasCursor, hasAgySkip]);
+
+  const [model, setModel] = useState(seededModel);
+  const [effort, setEffort] = useState(seededEffort);
+  const [permission, setPermission] = useState(seededPermission);
+  const [mode, setMode] = useState(seededModeValue);
+
+  // Re-seed whenever the seeding basis changes (agent switch, source load).
+  useEffect(() => setModel(seededModel), [seededModel]);
+  useEffect(() => setEffort(seededEffort), [seededEffort]);
+  useEffect(() => setPermission(seededPermission), [seededPermission]);
+  useEffect(() => setMode(seededModeValue), [seededModeValue]);
+
+  // Report the ready-to-send value on every change. The section is
+  // authoritative, so it always emits explicit values (clear aliases for an
+  // unselected model/effort; `[]` for a default mode) rather than relying on
+  // the server's inherit path.
+  useEffect(() => {
+    const value: ForkRunConfigValue = {};
+    if (showModel) {
+      value.modelOverride = model === MODEL_SELECT_DEFAULT ? "default" : model;
+    }
+    if (hasPermission) {
+      value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
+      value.terminalLaunchArgs =
+        permission === CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
+          ? []
+          : ["--permission-mode", permission];
+    } else if (hasApproval) {
+      value.terminalLaunchArgs =
+        CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === mode)?.args ?? [];
+    } else if (hasCursor) {
+      value.terminalLaunchArgs = CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === mode)?.args ?? [];
+    } else if (hasAgySkip) {
+      value.terminalLaunchArgs = AGY_NATIVE_SKIP_MODES.find((m) => m.value === mode)?.args ?? [];
+    }
+    onChange(value);
+  }, [
+    showModel,
+    hasPermission,
+    hasApproval,
+    hasCursor,
+    hasAgySkip,
+    model,
+    effort,
+    permission,
+    mode,
+    onChange,
+  ]);
+
+  if (
+    targetHarness === null ||
+    (!showModel && !hasPermission && !hasApproval && !hasCursor && !hasAgySkip)
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-4" data-testid="fork-session-run-config">
+      {showModel && (
+        <ConfigRow label="Model" description="Underlying LLM">
+          <RoutingModelSelect
+            value={model}
+            onValueChange={setModel}
+            offerSmartRouting={false}
+            testId="fork-session-config-model"
+            models={modelSelectOptions}
+            defaultLabel={defaultModelLabel(modelOptions)}
+            componentId="fork_session.config.model"
+          >
+            {modelsLoading && (
+              <div className="px-2.5 py-1 text-sm text-muted-foreground">Loading models…</div>
+            )}
+            {!modelsLoading && modelOptions.length === 0 && (
+              <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                {selectedHostId === null ? "Select a host to list models" : "Models unavailable"}
+              </div>
+            )}
+          </RoutingModelSelect>
+        </ConfigRow>
+      )}
+
+      {hasPermission && (
+        <>
+          <ConfigRow label="Effort" description="Reasoning depth vs. speed">
+            <Select
+              value={effort}
+              onValueChange={setEffort}
+              componentId="fork_session.config.effort"
+              valueHasNoPii
+            >
+              <SelectTrigger
+                className="w-full cursor-pointer"
+                data-testid="fork-session-config-effort"
+                aria-label="Reasoning effort"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+                {CLAUDE_NATIVE_EFFORTS.map((e) => (
+                  <SelectItem key={e.value} value={e.value}>
+                    {e.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </ConfigRow>
+
+          <ConfigRow label="Permissions" description="What the agent can do without asking">
+            <DescribedSelect
+              value={permission}
+              onValueChange={setPermission}
+              options={CLAUDE_NATIVE_PERMISSION_MODES}
+              testId="fork-session-config-permission"
+              ariaLabel="Permissions"
+              componentId="fork_session.config.permission"
+            />
+          </ConfigRow>
+        </>
+      )}
+
+      {hasApproval && (
+        <ConfigRow label="Approval" description="What the agent can do without asking">
+          <DescribedSelect
+            value={mode}
+            onValueChange={setMode}
+            options={CODEX_NATIVE_APPROVAL_MODES}
+            testId="fork-session-config-approval"
+            ariaLabel="Approval"
+            componentId="fork_session.config.approval"
+          />
+        </ConfigRow>
+      )}
+
+      {hasCursor && (
+        <ConfigRow label="Mode" description="How Cursor runs commands">
+          <DescribedSelect
+            value={mode}
+            onValueChange={setMode}
+            options={CURSOR_NATIVE_EXEC_MODES}
+            testId="fork-session-config-cursor-mode"
+            ariaLabel="Mode"
+            componentId="fork_session.config.cursor_mode"
+          />
+        </ConfigRow>
+      )}
+
+      {hasAgySkip && (
+        <>
+          <ConfigRow label="Permissions" description="What the agent can do without asking">
+            <DescribedSelect
+              value={mode}
+              onValueChange={setMode}
+              options={AGY_NATIVE_SKIP_MODES}
+              testId="fork-session-config-agy-skip"
+              ariaLabel="Permissions"
+              componentId="fork_session.config.permission"
+            />
+          </ConfigRow>
+          {mode === AGY_NATIVE_SKIP_VALUE && (
+            <div
+              role="alert"
+              data-testid="fork-session-agy-skip-banner"
+              className="flex items-start gap-1.5 rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-xs font-medium leading-relaxed text-destructive"
+            >
+              <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                Danger: this session runs Antigravity with all tool permission prompts disabled. It
+                can edit any file and run any command without asking.
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -191,6 +541,10 @@ export function ForkSessionForm({
   const [agentChoice, setAgentChoice] = useState<string>(SAME_AS_SOURCE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ready-to-send model/effort/permission overrides from the run-config
+  // section. Empty until that section (rendered only for a native target)
+  // reports its seeded value.
+  const [runConfig, setRunConfig] = useState<ForkRunConfigValue>({});
   // Working directory + git worktree live behind "Advanced settings",
   // collapsed by default (they prefill sensibly from the source, so the
   // common "clone & start in the same place" path needs no input).
@@ -319,6 +673,33 @@ export function ForkSessionForm({
   );
 
   const switching = agentChoice !== SAME_AS_SOURCE;
+
+  // Source session snapshot — seeds the run-config pickers on a same-harness
+  // fork (its current model / effort / permission mode). Cheap: the chat page
+  // already holds this in the shared ["session", id] cache.
+  const { session: sourceSession } = useSession(sourceSessionId);
+
+  // The agent the fork will bind: the switched-to target, else the source's
+  // own agent. Its harness drives the run-config section (shown only for a
+  // native target) and whether the pickers seed from the source.
+  const targetAgent = useMemo<Pick<AvailableAgent, "name" | "harness"> | null>(() => {
+    if (switching) return switchableAgents.find((a) => a.id === agentChoice) ?? null;
+    if (sourceAgent) return { name: sourceAgent.name, harness: sourceAgent.harness ?? null };
+    return null;
+  }, [switching, switchableAgents, agentChoice, sourceAgent]);
+  // Effective target harness key, resolved from the target agent (or the
+  // source session's wrapper label when keeping the source's agent — a UI
+  // session's bound agent may report a null harness).
+  const targetHarness = useMemo(() => {
+    const fromAgent = nativeCodingAgentForAvailableAgent(targetAgent)?.harness;
+    if (fromAgent) return fromAgent;
+    if (!switching) return nativeCodingAgentForSession(sourceSession)?.harness ?? null;
+    return null;
+  }, [targetAgent, switching, sourceSession]);
+  // Same-harness fork → seed pickers from the source; a switch to a different
+  // native harness → seed the target's own defaults.
+  const sourceHarness = nativeCodingAgentForSession(sourceSession)?.harness ?? null;
+  const sameHarnessAsSource = !switching || targetHarness === sourceHarness;
 
   // Default the host = source host (when online) else the first online
   // host, once hosts have loaded. Only fills an empty slot so an explicit
@@ -461,11 +842,14 @@ export function ForkSessionForm({
       }
       const trimmed = title.trim();
       // Empty title → omit so the server derives "Fork of <source title>".
+      // The run-config section (native targets only) reports its ready-to-send
+      // value; an empty object (non-native target) sends no run overrides.
       const fork = await forkSession(
         sourceSessionId,
         trimmed === "" ? undefined : trimmed,
         switching ? agentChoice : undefined,
         upToResponseId ?? undefined,
+        runConfig,
       );
       // Coding fork: launch the runner in the BACKGROUND, then navigate
       // into the (already-created, unbound) clone immediately — awaiting the
@@ -674,6 +1058,20 @@ export function ForkSessionForm({
             </SelectContent>
           </Select>
         </div>
+
+        {/* Run config (native targets only): model / effort / permission mode.
+              Seeds from the source on a same-harness fork, else from the target
+              harness's defaults. Renders nothing for a non-native target. */}
+        {targetAgent !== null && (
+          <ForkRunConfig
+            targetHarness={targetHarness}
+            targetAgent={targetAgent}
+            sourceSession={sourceSession}
+            sameHarnessAsSource={sameHarnessAsSource}
+            selectedHostId={isCodingSource ? selectedHostId : (sourceHostId ?? null)}
+            onChange={setRunConfig}
+          />
+        )}
 
         {/* Indicator: by default the clone reuses the source's working
               directory; changing it lives under Advanced settings. */}

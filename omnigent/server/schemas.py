@@ -2349,11 +2349,34 @@ class SessionForkRequest(BaseModel):
         the last item of that response are copied — items after it are
         dropped from the fork. When ``None`` (default), the full history
         is copied.
+    :param model_override: Per-session LLM model override to apply to the
+        fork, e.g. ``"claude-opus-4-7"``. **Omitting** the field inherits
+        the source's model (same as today, within the same provider
+        family); an explicit value overrides it, and a clear alias
+        (``"default"``, ``"off"``, ``"reset"``) resets the fork to the
+        bound agent's default. Validated against a conservative model-id
+        charset. Set by the web fork dialog's model picker.
+    :param reasoning_effort: Per-session reasoning-effort override to apply
+        to the fork, e.g. ``"high"``. **Omitting** the field inherits the
+        source's effort; an explicit value overrides it, and a clear alias
+        (``"default"``, ``"off"``, ``"reset"``) resets it. Validated
+        against the shared effort vocabulary; provider support is enforced
+        at launch. Set by the web fork dialog's effort picker.
+    :param terminal_launch_args: Per-session native-terminal pass-through
+        args to apply to the fork, e.g. ``["--permission-mode", "auto"]``
+        (the fork dialog's permission-/approval-mode selector).
+        **Omitting** the field keeps today's behavior — the source's args
+        are carried on a same-agent fork and dropped on an agent switch. A
+        list (including ``[]``, which clears them) replaces them wholesale.
+        Bounds (count / length) are validated server-side.
     """
 
     title: str | None = None
     agent_id: str | None = None
     up_to_response_id: str | None = None
+    model_override: str | None = None
+    reasoning_effort: str | None = None
+    terminal_launch_args: list[str] | None = None
 
     model_config = ConfigDict(extra="forbid")
 

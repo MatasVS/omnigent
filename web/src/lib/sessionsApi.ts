@@ -608,14 +608,32 @@ export async function createBundledSession(
  * @param upToResponseId - Optional truncation point, e.g. "resp_abc". When
  *   set, the fork copies history only up to and including that response
  *   ("fork from here"); omitted, the full history is copied.
+ * @param config - Optional run-config overrides from the fork dialog's
+ *   model / effort / permission-mode pickers. Each field is opt-in: a field
+ *   left `undefined` inherits the source (model settings carry within the
+ *   same provider family), while a sent field overrides it. The
+ *   permission-/approval-mode selector rides `terminalLaunchArgs` (e.g.
+ *   `["--permission-mode", "auto"]`); `[]` clears the source's launch args.
  */
 export async function forkSession(
   sourceId: string,
   title?: string,
   agentId?: string,
   upToResponseId?: string,
+  config?: {
+    modelOverride?: string;
+    reasoningEffort?: string;
+    terminalLaunchArgs?: string[];
+  },
 ): Promise<Session> {
-  const body: { title?: string; agent_id?: string; up_to_response_id?: string } = {};
+  const body: {
+    title?: string;
+    agent_id?: string;
+    up_to_response_id?: string;
+    model_override?: string;
+    reasoning_effort?: string;
+    terminal_launch_args?: string[];
+  } = {};
   if (title !== undefined) {
     body.title = title;
   }
@@ -624,6 +642,15 @@ export async function forkSession(
   }
   if (upToResponseId !== undefined) {
     body.up_to_response_id = upToResponseId;
+  }
+  if (config?.modelOverride !== undefined) {
+    body.model_override = config.modelOverride;
+  }
+  if (config?.reasoningEffort !== undefined) {
+    body.reasoning_effort = config.reasoningEffort;
+  }
+  if (config?.terminalLaunchArgs !== undefined) {
+    body.terminal_launch_args = config.terminalLaunchArgs;
   }
   const res = await authenticatedFetch(`/v1/sessions/${encodeURIComponent(sourceId)}/fork`, {
     method: "POST",

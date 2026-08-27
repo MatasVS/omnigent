@@ -3610,6 +3610,72 @@ def test_fork_copies_terminal_launch_args_by_default(
     assert fetched.terminal_launch_args == ["--permission-mode", "auto"]
 
 
+def test_fork_override_terminal_launch_args_supersedes_copy(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """An explicit launch-args override replaces the copied source args.
+
+    The fork dialog's permission-mode picker sends its own
+    ``terminal_launch_args``; the override must win over the same-agent copy,
+    and an empty list must clear the source's flags entirely.
+    """
+    source = conversation_store.create_conversation(
+        terminal_launch_args=["--permission-mode", "auto"],
+    )
+    picked = conversation_store.fork_conversation(
+        source.id,
+        override_terminal_launch_args=["--permission-mode", "plan"],
+        override_terminal_launch_args_set=True,
+    )
+    fetched = conversation_store.get_conversation(picked.id)
+    assert fetched is not None
+    assert fetched.terminal_launch_args == ["--permission-mode", "plan"]
+
+    cleared = conversation_store.fork_conversation(
+        source.id,
+        override_terminal_launch_args=[],
+        override_terminal_launch_args_set=True,
+    )
+    fetched_cleared = conversation_store.get_conversation(cleared.id)
+    assert fetched_cleared is not None
+    assert fetched_cleared.terminal_launch_args == []
+
+
+def test_fork_override_model_and_effort_supersede_inherit(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """An explicit model/effort override wins over the source's copied values,
+    and a cleared override (set-flag on, value None) resets to the agent
+    default even on a same-agent fork that would otherwise copy them."""
+    source = conversation_store.create_conversation()
+    conversation_store.update_conversation(
+        source.id, model_override="sonnet", reasoning_effort="low"
+    )
+
+    overridden = conversation_store.fork_conversation(
+        source.id,
+        override_model_override="opus",
+        override_model_override_set=True,
+        override_reasoning_effort="high",
+        override_reasoning_effort_set=True,
+    )
+    fetched = conversation_store.get_conversation(overridden.id)
+    assert fetched is not None
+    assert fetched.model_override == "opus"
+    assert fetched.reasoning_effort == "high"
+
+    cleared = conversation_store.fork_conversation(
+        source.id,
+        override_model_override=None,
+        override_model_override_set=True,
+    )
+    fetched_cleared = conversation_store.get_conversation(cleared.id)
+    assert fetched_cleared is not None
+    assert fetched_cleared.model_override is None
+    # Effort NOT overridden ⇒ same-agent fork still copies the source's value.
+    assert fetched_cleared.reasoning_effort == "low"
+
+
 def test_fork_drops_terminal_launch_args_when_switching_agent(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

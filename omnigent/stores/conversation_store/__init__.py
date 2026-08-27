@@ -1503,6 +1503,13 @@ class ConversationStore(ABC):
         cloned_agent_description: str | None = None,
         copy_model_settings: bool = True,
         copy_terminal_launch_args: bool = True,
+        override_model_override: str | None = None,
+        override_model_override_set: bool = False,
+        override_reasoning_effort: str | None = None,
+        override_reasoning_effort_set: bool = False,
+        override_terminal_launch_args: list[str] | None = None,
+        override_terminal_launch_args_set: bool = False,
+        dropped_label_keys: frozenset[str] = frozenset(),
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -1552,6 +1559,26 @@ class ConversationStore(ABC):
             with none — used when the fork switches to a different CLI, where
             the source's flags are meaningless or rejected (e.g. Claude Code's
             ``--permission-mode`` would make ``pi`` exit at launch).
+        :param override_model_override: Explicit ``model_override`` for the
+            fork, applied only when ``override_model_override_set`` — then it
+            supersedes the ``copy_model_settings`` copy.
+        :param override_model_override_set: Whether the caller chose an
+            explicit ``model_override`` (fork dialog's model picker).
+        :param override_reasoning_effort: Explicit ``reasoning_effort`` for
+            the fork, applied only when ``override_reasoning_effort_set``.
+        :param override_reasoning_effort_set: Whether the caller chose an
+            explicit ``reasoning_effort``.
+        :param override_terminal_launch_args: Explicit
+            ``terminal_launch_args`` for the fork (the permission-mode
+            selector), applied only when ``override_terminal_launch_args_set``
+            — then it supersedes the ``copy_terminal_launch_args`` copy.
+        :param override_terminal_launch_args_set: Whether the caller chose
+            explicit launch args.
+        :param dropped_label_keys: Source labels to NOT copy onto the fork,
+            beyond the always-dropped instance-scoped set (e.g. the
+            permission-mode / codex-bypass label keys when the dialog picks
+            explicit launch args, so a stale copied label can't shadow the
+            freshly chosen mode).
         :param carry_history_into_native: When ``True``, stamp
             :data:`FORK_CARRY_HISTORY_LABEL_KEY` on the fork so a native
             target harness rebuilds its transcript (clone the source's
