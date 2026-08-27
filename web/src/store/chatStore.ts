@@ -119,7 +119,7 @@ import { getOmnigentHostConfig, type OmnigentInteractionStatus } from "@/lib/hos
 import { emitInteractionPhase } from "@/lib/analyticsEmit";
 import { getSessionHost } from "@/lib/sessionHost";
 import { isSystemUserContent } from "@/lib/systemMessage";
-import { isNativeWrapper } from "@/lib/nativeCodingAgents";
+import { isNativeTerminalSession as isNativeTerminalSessionFn, isNativeWrapper } from "@/lib/nativeCodingAgents";
 
 export interface SendOptions {
   /**
@@ -2940,7 +2940,7 @@ function sessionBindingPatch(
 > {
   const wrapper = session.labels?.["omnigent.wrapper"];
   return {
-    isNativeTerminalSession: isNativeWrapper(wrapper),
+    isNativeTerminalSession: isNativeTerminalSessionFn(session),
     // Native wrapper whose model lives in the vendor TUI (no Omnigent picker):
     // qwen/goose/cursor/pi/opencode. nativeModelFamilyForSession is non-null
     // only for claude-/codex-native, which keep the composer model label.
