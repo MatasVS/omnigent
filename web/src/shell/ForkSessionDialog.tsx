@@ -289,33 +289,81 @@ function ForkRunConfig({
   const [permission, setPermission] = useState(seededPermission);
   const [mode, setMode] = useState(seededModeValue);
 
-  // Re-seed whenever the seeding basis changes (agent switch, source load).
-  useEffect(() => setModel(seededModel), [seededModel]);
-  useEffect(() => setEffort(seededEffort), [seededEffort]);
-  useEffect(() => setPermission(seededPermission), [seededPermission]);
-  useEffect(() => setMode(seededModeValue), [seededModeValue]);
+  // Which controls the user has actually changed. An UNTOUCHED control omits
+  // its field from the emitted config, so the fork request never carries it
+  // and the server's inherit / reset-by-family path decides — which is exactly
+  // the seeded meaning (same-harness → inherit the source; switch → the
+  // target's default). This is what makes the section safe against the async
+  // model catalog: a submit before `useHostModelOptions` resolves (or a source
+  // model absent from the host's catalog) leaves the Model row on its "Default"
+  // placeholder, but because it's untouched we send NOTHING rather than
+  // `model_override: "default"` — so a fast clone can't silently reset the
+  // source's model. Only a deliberate pick emits an explicit value (including
+  // an explicit "Default", which then means clear-to-agent-default).
+  const [touched, setTouched] = useState({
+    model: false,
+    effort: false,
+    permission: false,
+    mode: false,
+  });
+  const changeModel = (v: string) => {
+    setTouched((t) => ({ ...t, model: true }));
+    setModel(v);
+  };
+  const changeEffort = (v: string) => {
+    setTouched((t) => ({ ...t, effort: true }));
+    setEffort(v);
+  };
+  const changePermission = (v: string) => {
+    setTouched((t) => ({ ...t, permission: true }));
+    setPermission(v);
+  };
+  const changeMode = (v: string) => {
+    setTouched((t) => ({ ...t, mode: true }));
+    setMode(v);
+  };
 
-  // Report the ready-to-send value on every change. The section is
-  // authoritative, so it always emits explicit values (clear aliases for an
-  // unselected model/effort; `[]` for a default mode) rather than relying on
-  // the server's inherit path.
+  // Re-seed whenever the seeding basis changes (agent switch, source load), but
+  // never clobber a control the user already touched — a catalog refetch that
+  // recomputes `seededModel` must not overwrite a manual pick.
+  useEffect(() => {
+    if (!touched.model) setModel(seededModel);
+  }, [seededModel, touched.model]);
+  useEffect(() => {
+    if (!touched.effort) setEffort(seededEffort);
+  }, [seededEffort, touched.effort]);
+  useEffect(() => {
+    if (!touched.permission) setPermission(seededPermission);
+  }, [seededPermission, touched.permission]);
+  useEffect(() => {
+    if (!touched.mode) setMode(seededModeValue);
+  }, [seededModeValue, touched.mode]);
+
+  // Report the ready-to-send value on every change. Each field is included
+  // ONLY when its control was touched (see `touched` above); an untouched
+  // section therefore emits `{}` and the server inherits/resets as it would
+  // for a fork that sent no run-config at all.
   useEffect(() => {
     const value: ForkRunConfigValue = {};
-    if (showModel) {
+    if (showModel && touched.model) {
       value.modelOverride = model === MODEL_SELECT_DEFAULT ? "default" : model;
     }
     if (hasPermission) {
-      value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
-      value.terminalLaunchArgs =
-        permission === CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
-          ? []
-          : ["--permission-mode", permission];
-    } else if (hasApproval) {
+      if (touched.effort) {
+        value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
+      }
+      if (touched.permission) {
+        value.terminalLaunchArgs =
+          permission === CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
+            ? []
+            : ["--permission-mode", permission];
+      }
+    } else if (hasApproval && touched.mode) {
       value.terminalLaunchArgs =
         CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === mode)?.args ?? [];
-    } else if (hasCursor) {
+    } else if (hasCursor && touched.mode) {
       value.terminalLaunchArgs = CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === mode)?.args ?? [];
-    } else if (hasAgySkip) {
+    } else if (hasAgySkip && touched.mode) {
       value.terminalLaunchArgs = AGY_NATIVE_SKIP_MODES.find((m) => m.value === mode)?.args ?? [];
     }
     onChange(value);
@@ -329,6 +377,7 @@ function ForkRunConfig({
     effort,
     permission,
     mode,
+    touched,
     onChange,
   ]);
 
@@ -345,7 +394,7 @@ function ForkRunConfig({
         <ConfigRow label="Model" description="Underlying LLM">
           <RoutingModelSelect
             value={model}
-            onValueChange={setModel}
+            onValueChange={changeModel}
             offerSmartRouting={false}
             testId="fork-session-config-model"
             models={modelSelectOptions}
@@ -369,7 +418,7 @@ function ForkRunConfig({
           <ConfigRow label="Effort" description="Reasoning depth vs. speed">
             <Select
               value={effort}
-              onValueChange={setEffort}
+              onValueChange={changeEffort}
               componentId="fork_session.config.effort"
               valueHasNoPii
             >
@@ -394,7 +443,7 @@ function ForkRunConfig({
           <ConfigRow label="Permissions" description="What the agent can do without asking">
             <DescribedSelect
               value={permission}
-              onValueChange={setPermission}
+              onValueChange={changePermission}
               options={CLAUDE_NATIVE_PERMISSION_MODES}
               testId="fork-session-config-permission"
               ariaLabel="Permissions"
@@ -408,7 +457,7 @@ function ForkRunConfig({
         <ConfigRow label="Approval" description="What the agent can do without asking">
           <DescribedSelect
             value={mode}
-            onValueChange={setMode}
+            onValueChange={changeMode}
             options={CODEX_NATIVE_APPROVAL_MODES}
             testId="fork-session-config-approval"
             ariaLabel="Approval"
@@ -421,7 +470,7 @@ function ForkRunConfig({
         <ConfigRow label="Mode" description="How Cursor runs commands">
           <DescribedSelect
             value={mode}
-            onValueChange={setMode}
+            onValueChange={changeMode}
             options={CURSOR_NATIVE_EXEC_MODES}
             testId="fork-session-config-cursor-mode"
             ariaLabel="Mode"
@@ -435,7 +484,7 @@ function ForkRunConfig({
           <ConfigRow label="Permissions" description="What the agent can do without asking">
             <DescribedSelect
               value={mode}
-              onValueChange={setMode}
+              onValueChange={changeMode}
               options={AGY_NATIVE_SKIP_MODES}
               testId="fork-session-config-agy-skip"
               ariaLabel="Permissions"

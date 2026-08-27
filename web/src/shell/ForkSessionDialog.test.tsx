@@ -540,19 +540,44 @@ describe("ForkSessionDialog", () => {
     // Switching to a same-family native target forwards agent_id so the
     // server clones that agent and marks the fork for native rebuild. The
     // name was left blank (optional) → undefined so the server derives it.
-    // Switching to a native target reveals the run-config section; untouched,
-    // it reports the target harness's defaults — Default model/effort (clear
-    // alias "default") and the default permission mode (empty launch args).
+    // Switching reveals the run-config section, but no control was touched, so
+    // it emits `{}` — the server inherits/resets per its own family rule
+    // rather than the dialog racing the async model catalog and sending an
+    // explicit "default" that would clear the source's model.
     expect(forkSessionMock).toHaveBeenCalledWith(
       "conv_src",
       undefined,
       "ag_claude_native",
       undefined,
-      {
-        modelOverride: "default",
-        reasoningEffort: "default",
-        terminalLaunchArgs: [],
-      },
+      {},
+    );
+  });
+
+  it("emits only the run-config fields the user actually changed", async () => {
+    forkSessionMock.mockResolvedValue({
+      id: "conv_fork",
+    } as unknown as Awaited<ReturnType<typeof forkSession>>);
+    renderDialog();
+
+    // Switch to claude-native so the run-config section renders.
+    openAgentSelect();
+    fireEvent.click(screen.getByTestId("fork-session-agent-option-ag_claude_native"));
+
+    // Touch ONLY the permission control (pick "Plan"); leave model + effort
+    // untouched. The fork must carry the permission launch args and NOTHING
+    // for model/effort — so the server inherits those instead of the dialog
+    // sending a catalog-racing "default" that clears them.
+    fireEvent.click(screen.getByTestId("fork-session-config-permission"));
+    fireEvent.click(screen.getByRole("option", { name: "Plan" }));
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+
+    await waitFor(() => expect(forkSessionMock).toHaveBeenCalledTimes(1));
+    expect(forkSessionMock).toHaveBeenCalledWith(
+      "conv_src",
+      undefined,
+      "ag_claude_native",
+      undefined,
+      { terminalLaunchArgs: ["--permission-mode", "plan"] },
     );
   });
 
