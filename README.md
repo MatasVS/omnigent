@@ -360,10 +360,11 @@ omnigent config set --global \
 
 The title generator receives the current date as `YYYY-MM-DD`, then applies
 these requirements to the first user message. The setting is server-owned and
-does not alter an agent's portable instructions. Generated titles remain
-limited to 60 characters. The setting applies to new sessions after the local
-Omnigent server restarts. For longer instructions, edit
-`~/.omnigent/config.yaml` directly and use a YAML block scalar:
+does not alter an agent's portable instructions. Generated titles longer than
+60 characters are rejected, leaving the first-message fallback title in place.
+The setting applies to new sessions after the local Omnigent server restarts.
+For longer instructions, edit `~/.omnigent/config.yaml` directly and use a YAML
+block scalar:
 
 ```yaml
 session_title_instructions: |

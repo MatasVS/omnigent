@@ -1945,6 +1945,15 @@ def test_server_command_reads_tunnel_token_and_does_not_spawn_runner(
     monkeypatch.setattr(_local_server_mod, "register_local_server", lambda port: None)
     monkeypatch.setattr(_local_server_mod, "clear_local_server_record", lambda: None)
 
+    config_home = tmp_path / "config"
+    config_home.mkdir()
+    (config_home / "config.yaml").write_text(
+        "session_title_instructions: Prefix titles with the current date.\n"
+        "branding:\n"
+        "  app_name: Must not leak into bare server config\n"
+    )
+    monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(config_home))
+
     db_path = tmp_path / "chat.db"
     artifact_dir = tmp_path / "artifacts"
 
@@ -1977,6 +1986,9 @@ def test_server_command_reads_tunnel_token_and_does_not_spawn_runner(
     assert captured["create_app_kwargs"]["runner_tunnel_tokens"] == frozenset(
         {"test-tunnel-token-abc"}
     )
+    assert captured["create_app_kwargs"]["server_config"] == {
+        "session_title_instructions": "Prefix titles with the current date."
+    }
 
 
 def test_server_explicit_config_overrides_omnigent_config_env(

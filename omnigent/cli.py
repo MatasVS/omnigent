@@ -3986,7 +3986,10 @@ def server(
     )
     from omnigent.server.app import create_app
     from omnigent.server.auth import create_auth_provider
-    from omnigent.server.server_config import config_str_list
+    from omnigent.server.server_config import (
+        SESSION_TITLE_INSTRUCTIONS_KEY,
+        config_str_list,
+    )
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
     from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
     from omnigent.stores.conversation_store.sqlalchemy_store import (
@@ -3996,6 +3999,15 @@ def server(
     from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
 
     cfg = _load_config(config_path)
+    title_server_config = cfg
+    if config_path is None:
+        global_cfg = _load_global_config()
+        title_instructions = global_cfg.get(SESSION_TITLE_INSTRUCTIONS_KEY)
+        title_server_config = (
+            {SESSION_TITLE_INSTRUCTIONS_KEY: title_instructions}
+            if title_instructions is not None
+            else {}
+        )
 
     # Let the server-config reader (branding) see the same ``-c`` file.
     if config_path:
@@ -4183,8 +4195,7 @@ def server(
         admins=config_str_list(cfg.get("admins")),
         allowed_domains=config_str_list(cfg.get("allowed_domains")),
         sandbox_config=sandbox_config,
-        # Without --config, let create_app resolve ~/.omnigent/config.yaml.
-        server_config=cfg if config_path else None,
+        server_config=title_server_config,
     )
 
     click.echo(f"Starting omnigent server on {host}:{port}")
