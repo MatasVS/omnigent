@@ -138,6 +138,7 @@ class _ConversationStore:
         override_terminal_launch_args: list[str] | None = None,
         override_terminal_launch_args_set: bool = False,
         dropped_label_keys: frozenset[str] = frozenset(),
+        extra_labels: dict[str, str] | None = None,
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -198,6 +199,7 @@ class _ConversationStore:
                 "override_terminal_launch_args": override_terminal_launch_args,
                 "override_terminal_launch_args_set": override_terminal_launch_args_set,
                 "dropped_label_keys": dropped_label_keys,
+                "extra_labels": extra_labels,
                 "carry_history_into_native": carry_history_into_native,
                 "resume_source_native_session": resume_source_native_session,
                 "presentation_labels": presentation_labels,
@@ -923,6 +925,88 @@ async def test_fork_same_agent_keeps_permission_mode_label() -> None:
 
     assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
     assert conv_store.fork_calls[0]["dropped_label_keys"] == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fork_codex_bypass_stamps_label_on_codex_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bypass opt-in stamps the codex label via ``extra_labels``.
+
+    The source's own bypass label is always dropped (instance-scoped), so this
+    explicit, banner-gated request field is the ONLY path that arms bypass on a
+    fork — and the store applies ``extra_labels`` AFTER the drop, so the opt-in
+    wins. Gated on the target actually being codex-native.
+    """
+    conv = _make_conversation()
+    conv_store = _ConversationStore(
+        conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv},
+        items_by_conv={
+            "e9f8f58523cec9a57d3bdf93be543e8c": [
+                _make_item("9980c8a9248139f14f4165e5d53088aa", "Hi")
+            ]
+        },
+    )
+    # The codex target (44b4…) must report codex-native so the route stamps.
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.get_agent_cache",
+        lambda: _StubAgentCache(
+            {
+                "087b7cb7ac30abf4debfaa578d052ec6": "claude_sdk",
+                "44b4151dd6cdfed6ee19430832398e05": "codex-native",
+            }
+        ),
+    )
+    client = TestClient(_build_app(conv_store, agent_store=_switch_agent_store()))
+
+    resp = client.post(
+        "/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork",
+        json={"agent_id": "44b4151dd6cdfed6ee19430832398e05", "codex_bypass_sandbox": True},
+    )
+
+    assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
+    extra = conv_store.fork_calls[0]["extra_labels"]
+    assert extra == {"omnigent.codex_native.bypass_sandbox": "1"}, (
+        f"bypass opt-in must stamp the codex bypass label, got {extra!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fork_codex_bypass_rejected_on_non_codex_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arming bypass for a non-codex target is a 400 (the label is inert there).
+
+    Refusing rather than silently ignoring keeps the dangerous flag from being
+    set on a fork it can't apply to — the request is a client bug.
+    """
+    conv = _make_conversation()
+    conv_store = _ConversationStore(
+        conversations={"e9f8f58523cec9a57d3bdf93be543e8c": conv},
+        items_by_conv={
+            "e9f8f58523cec9a57d3bdf93be543e8c": [
+                _make_item("9980c8a9248139f14f4165e5d53088aa", "Hi")
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.get_agent_cache",
+        lambda: _StubAgentCache(
+            {
+                "087b7cb7ac30abf4debfaa578d052ec6": "claude_sdk",
+                "280d725b404d2915f9e9d6cccce91303": "claude-native",
+            }
+        ),
+    )
+    client = TestClient(_build_app(conv_store, agent_store=_switch_agent_store()))
+
+    resp = client.post(
+        "/v1/sessions/e9f8f58523cec9a57d3bdf93be543e8c/fork",
+        json={"agent_id": "280d725b404d2915f9e9d6cccce91303", "codex_bypass_sandbox": True},
+    )
+
+    assert resp.status_code == 400, f"got {resp.status_code}: {resp.text}"
+    assert conv_store.fork_calls == [], "no fork should happen on an invalid bypass opt-in"
 
 
 @pytest.mark.asyncio

@@ -122,6 +122,7 @@ from omnigent.server.routes._sessions.helpers import (
     _get_runner_client,
     _invalidate_runner_backed_snapshot_state,
     _multipart_missing_detail,
+    _native_coding_agent_for_agent,
     _notify_runner_of_bundled_child,
     _parse_session_create_metadata,
     _permission_level_from_grants,
@@ -2300,6 +2301,23 @@ def register_core_routes(
             dropped_label_keys_set.add(_CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY)
         dropped_label_keys: frozenset[str] = frozenset(dropped_label_keys_set)
 
+        # DANGEROUS codex full-bypass. The source's bypass label is always
+        # dropped above (instance-scoped), so a bypass-armed source never
+        # silently re-arms its clone. The ONLY way a fork enables bypass is an
+        # explicit, banner-gated opt-in from the dialog — and only when the
+        # bound target is actually codex-native (the label is inert elsewhere,
+        # so refuse to stamp it on a non-Codex fork). Stamped via extra_labels,
+        # which the store applies AFTER the drop so the opt-in wins.
+        extra_labels: dict[str, str] = {}
+        if body.codex_bypass_sandbox:
+            target_native = await asyncio.to_thread(_native_coding_agent_for_agent, base_agent)
+            if target_native is None or target_native.harness != "codex-native":
+                raise OmnigentError(
+                    "codex_bypass_sandbox is only valid for a codex-native fork target",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            extra_labels[_CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY] = "1"
+
         # When the fork binds a NATIVE target, the native CLI won't replay
         # the copied Omnigent transcript on its own — mark the fork so the
         # runner carries history into the native harness. Same-family: clone
@@ -2377,6 +2395,7 @@ def register_core_routes(
                 override_terminal_launch_args=override_launch_args,
                 override_terminal_launch_args_set=launch_args_set,
                 dropped_label_keys=dropped_label_keys,
+                extra_labels=extra_labels,
                 # Launch flags are CLI-specific. On an agent switch the fork may
                 # bind a different CLI (e.g. claude-code → pi), whose flag set
                 # differs — Claude Code's ``--permission-mode`` makes pi exit at

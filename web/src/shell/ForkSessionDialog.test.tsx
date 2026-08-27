@@ -581,6 +581,38 @@ describe("ForkSessionDialog", () => {
     );
   });
 
+  it("arms Codex bypass only on an explicit pick, with a danger banner", async () => {
+    forkSessionMock.mockResolvedValue({
+      id: "conv_fork",
+    } as unknown as Awaited<ReturnType<typeof forkSession>>);
+    renderDialog();
+
+    // Switch to codex-native so the Approval row (with the 4th bypass option)
+    // renders. No banner until the dangerous option is actually chosen.
+    openAgentSelect();
+    fireEvent.click(screen.getByTestId("fork-session-agent-option-ag_codex_native"));
+    expect(screen.queryByTestId("fork-session-codex-bypass-banner")).not.toBeInTheDocument();
+
+    // Pick "Bypass approvals & sandbox" → danger banner appears and the fork
+    // carries the dedicated opt-in (as a label server-side), NOT launch args.
+    fireEvent.click(screen.getByTestId("fork-session-config-approval"));
+    fireEvent.click(screen.getByRole("option", { name: "Bypass approvals & sandbox" }));
+    expect(screen.getByTestId("fork-session-codex-bypass-banner")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+
+    await waitFor(() => expect(forkSessionMock).toHaveBeenCalledTimes(1));
+    expect(forkSessionMock).toHaveBeenCalledWith(
+      "conv_src",
+      undefined,
+      "ag_codex_native",
+      undefined,
+      {
+        terminalLaunchArgs: [],
+        codexBypassSandbox: true,
+      },
+    );
+  });
+
   it("labels the keep-current option with the source agent's name, not generic text", () => {
     // The source is bound to the claude-sdk built-in ("Claude"). The
     // keep-current option reads "<agent> (same as original session)" so the

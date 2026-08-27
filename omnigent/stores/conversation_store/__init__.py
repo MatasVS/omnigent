@@ -1510,6 +1510,7 @@ class ConversationStore(ABC):
         override_terminal_launch_args: list[str] | None = None,
         override_terminal_launch_args_set: bool = False,
         dropped_label_keys: frozenset[str] = frozenset(),
+        extra_labels: dict[str, str] | None = None,
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -1579,6 +1580,10 @@ class ConversationStore(ABC):
             permission-mode / codex-bypass label keys when the dialog picks
             explicit launch args, so a stale copied label can't shadow the
             freshly chosen mode).
+        :param extra_labels: Labels stamped on the fork AFTER copy/drop, so a
+            deliberate opt-in beats the always-drop rule — e.g. the fork
+            dialog re-arming the DANGEROUS ``codex_native.bypass_sandbox``
+            label (the only path that sets it; the source's is always dropped).
         :param carry_history_into_native: When ``True``, stamp
             :data:`FORK_CARRY_HISTORY_LABEL_KEY` on the fork so a native
             target harness rebuilds its transcript (clone the source's

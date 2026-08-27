@@ -3445,6 +3445,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         override_terminal_launch_args: list[str] | None = None,
         override_terminal_launch_args_set: bool = False,
         dropped_label_keys: frozenset[str] = frozenset(),
+        extra_labels: dict[str, str] | None = None,
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -3528,6 +3529,12 @@ class SqlAlchemyConversationStore(ConversationStore):
             passes the permission-mode / codex-bypass label keys here when
             the dialog picks explicit launch args, so the stale copied label
             can't shadow the freshly chosen mode.
+        :param extra_labels: Labels to stamp on the fork AFTER the copy /
+            drop / presentation-label logic, so a deliberate opt-in wins over
+            the always-drop rule. The fork route passes the DANGEROUS
+            ``codex_native.bypass_sandbox`` label here when the dialog's
+            approval selector explicitly re-arms bypass — the only path that
+            sets it, since the source's own bypass label is always dropped.
         :param carry_history_into_native: When ``True``, stamp
             :data:`FORK_CARRY_HISTORY_LABEL_KEY` on the fork so a native
             target harness rebuilds its transcript instead of starting
@@ -3586,6 +3593,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             override_terminal_launch_args=override_terminal_launch_args,
             override_terminal_launch_args_set=override_terminal_launch_args_set,
             dropped_label_keys=dropped_label_keys,
+            extra_labels=extra_labels,
             carry_history_into_native=carry_history_into_native,
             resume_source_native_session=resume_source_native_session,
             presentation_labels=presentation_labels,
@@ -3612,6 +3620,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         override_terminal_launch_args: list[str] | None = None,
         override_terminal_launch_args_set: bool = False,
         dropped_label_keys: frozenset[str] = frozenset(),
+        extra_labels: dict[str, str] | None = None,
         carry_history_into_native: bool = False,
         resume_source_native_session: bool = True,
         presentation_labels: dict[str, str] | None = None,
@@ -3879,6 +3888,13 @@ class SqlAlchemyConversationStore(ConversationStore):
                 for _pkey in (UI_MODE_LABEL_KEY, WRAPPER_LABEL_KEY):
                     fork_labels.pop(_pkey, None)
                 fork_labels.update(presentation_labels)
+            # Caller-supplied labels stamped LAST so a deliberate opt-in beats
+            # both the copy and the always-drop rules — e.g. the fork dialog
+            # re-arming the DANGEROUS codex bypass. The source's own bypass
+            # label was already dropped (it's instance-scoped), so this is the
+            # only path that sets it, and only from an explicit request field.
+            if extra_labels:
+                fork_labels.update(extra_labels)
             if fork_labels:
                 _upsert_labels(session, new_conv.id, fork_labels, now)
 

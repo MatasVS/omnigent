@@ -2369,6 +2369,15 @@ class SessionForkRequest(BaseModel):
         are carried on a same-agent fork and dropped on an agent switch. A
         list (including ``[]``, which clears them) replaces them wholesale.
         Bounds (count / length) are validated server-side.
+    :param codex_bypass_sandbox: Opt-in for the DANGEROUS codex-native
+        full-bypass (``--dangerously-bypass-approvals-and-sandbox``) on the
+        fork. The source's bypass label is ALWAYS dropped on a fork (a
+        bypass-armed source can never silently re-arm its clone), so this is
+        the only way a fork enables it — an explicit, banner-gated opt-in
+        from the dialog, mirroring the new-session approval selector. ``True``
+        stamps ``omnigent.codex_native.bypass_sandbox`` on the fork; ``False``
+        / omitted leaves the fork in Codex's normal approval/sandbox stance.
+        Only meaningful for a codex-native target; ignored otherwise.
     """
 
     title: str | None = None
@@ -2377,6 +2386,7 @@ class SessionForkRequest(BaseModel):
     model_override: str | None = None
     reasoning_effort: str | None = None
     terminal_launch_args: list[str] | None = None
+    codex_bypass_sandbox: bool = False
 
     model_config = ConfigDict(extra="forbid")
 

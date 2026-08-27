@@ -52,6 +52,8 @@ import {
   AGY_NATIVE_SKIP_MODES,
   AGY_NATIVE_SKIP_VALUE,
   CODEX_NATIVE_APPROVAL_MODES,
+  CODEX_NATIVE_BYPASS_APPROVAL_OPTION,
+  CODEX_NATIVE_BYPASS_APPROVAL_VALUE,
   CODEX_NATIVE_DEFAULT_APPROVAL_MODE,
   CURSOR_NATIVE_DEFAULT_EXEC_MODE,
   CURSOR_NATIVE_EXEC_MODES,
@@ -70,7 +72,7 @@ import {
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
-import { agentRootName, forkTargetCarriesHistory } from "@/lib/forkHarness";
+import { agentRootName, forkTargetCarriesHistory, harnessFamily } from "@/lib/forkHarness";
 import { checkHostDirectory } from "@/hooks/useHostFilesystem";
 import { getCliServerUrl } from "@/lib/host";
 import { WorkspacePicker, isNavigablePath } from "./WorkspacePicker";
@@ -154,6 +156,14 @@ export interface ForkRunConfigValue {
   modelOverride?: string;
   reasoningEffort?: string;
   terminalLaunchArgs?: string[];
+  /**
+   * DANGEROUS codex full-bypass opt-in. Only emitted (as `true`) when the
+   * user explicitly picks "Bypass approvals & sandbox" for a codex target;
+   * the fork request carries it as `codex_bypass_sandbox` and the server
+   * stamps the bypass label. Absent otherwise — the source's own bypass is
+   * always dropped, so a fork is never silently armed.
+   */
+  codexBypassSandbox?: boolean;
 }
 
 /**
@@ -162,25 +172,27 @@ export interface ForkRunConfigValue {
  * harness (Claude Code / Codex / Pi / Cursor / Antigravity) — SDK and non-coding
  * targets have no per-session run knobs the fork can express.
  *
- * Seeding follows the source's harness: forking to the SAME harness seeds the
- * pickers from the source session's current model / effort / permission mode
- * (so an untouched fork continues where the original left off); switching to a
- * DIFFERENT harness seeds the target harness's own defaults (an unselected
- * model/effort and the harness's default permission mode), exactly like starting
- * a fresh session on that harness.
+ * Seeding mirrors the two backend carry rules so the displayed value always
+ * matches what the fork will do: model/effort seed from the source when the
+ * target is in the same PROVIDER FAMILY (`sameFamilyAsSource`), and the
+ * permission/approval/mode pickers seed from the source only on a same-AGENT
+ * fork (`sameAgentAsSource`); otherwise each seeds the target's default. See
+ * the parent for how those two flags are derived from the backend's
+ * `copy_model_settings` / `copy_terminal_launch_args` gates.
  *
- * The section is authoritative: whatever the pickers show is sent explicitly on
- * submit (a "Default" model/effort rides the clear alias; the permission /
- * approval / cursor / agy mode rides `terminalLaunchArgs`, `[]` clearing the
- * source's launch flags). An untouched same-harness fork therefore re-sends the
- * source's values, which yields the identical result as inheriting them.
+ * Emission is opt-in per control: a field is sent ONLY when the user actually
+ * changed that control (see `touched`). An untouched control omits its field,
+ * so the fork request carries nothing for it and the server's own
+ * inherit / reset-by-family path decides — which is exactly the seeded meaning.
+ * This is what keeps the section honest against the async model catalog: a
+ * submit before the catalog resolves can't emit a spurious `model_override`.
  *
  * @param targetHarness - Effective target harness key (e.g. "claude-native"),
  *   or null for a non-native target (the section renders nothing).
  * @param targetAgent - The `{ name, harness }` the fork will bind, for
  *   capability detection.
  * @param sourceSession - Source session, read to seed the pickers.
- * @param sameHarnessAsSource - Whether the fork keeps the source's harness
+ * @param sameFamilyAsSource - Whether the fork keeps the source's harness
  *   family; seeds model + effort (which the backend carries within a family).
  * @param sameAgentAsSource - Whether the fork keeps the source's exact agent;
  *   seeds the launch-arg pickers (permission / approval / mode), which the
@@ -193,7 +205,7 @@ function ForkRunConfig({
   targetHarness,
   targetAgent,
   sourceSession,
-  sameHarnessAsSource,
+  sameFamilyAsSource,
   sameAgentAsSource,
   selectedHostId,
   onChange,
@@ -201,7 +213,7 @@ function ForkRunConfig({
   targetHarness: string | null;
   targetAgent: Pick<AvailableAgent, "name" | "harness">;
   sourceSession: Session | null;
-  sameHarnessAsSource: boolean;
+  sameFamilyAsSource: boolean;
   sameAgentAsSource: boolean;
   selectedHostId: string | null;
   onChange: (value: ForkRunConfigValue) => void;
@@ -246,18 +258,18 @@ function ForkRunConfig({
     // Seed the source's model only once the catalog confirms it: a model id
     // absent from the loaded options has no Select item to land on and would
     // blank the trigger. Until the catalog resolves, Default holds.
-    const picked = sameHarnessAsSource ? sourceSession?.modelOverride : null;
+    const picked = sameFamilyAsSource ? sourceSession?.modelOverride : null;
     return picked && modelOptions.some((m) => m.id === picked) ? picked : MODEL_SELECT_DEFAULT;
-  }, [sameHarnessAsSource, sourceSession, modelOptions]);
+  }, [sameFamilyAsSource, sourceSession, modelOptions]);
   const seededEffort = useMemo(() => {
     // Seed only an effort the picker can display; a source value outside the
     // offered vocabulary (e.g. "minimal") falls back to Default rather than
     // leaving the Select on an empty, unselectable value.
-    const effort = sameHarnessAsSource ? sourceSession?.reasoningEffort : null;
+    const effort = sameFamilyAsSource ? sourceSession?.reasoningEffort : null;
     return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort)
       ? effort
       : EFFORT_SELECT_NONE;
-  }, [sameHarnessAsSource, sourceSession]);
+  }, [sameFamilyAsSource, sourceSession]);
   const seededPermission = useMemo(() => {
     // Permission mode rides terminal_launch_args, which the backend copies
     // ONLY on a same-AGENT fork (copy_terminal_launch_args = not switching).
@@ -286,13 +298,24 @@ function ForkRunConfig({
       : hasCursor
         ? CURSOR_NATIVE_DEFAULT_EXEC_MODE
         : AGY_NATIVE_DEFAULT_SKIP_MODE;
+    // Codex bypass rides a LABEL, not launch args, so match it first: a
+    // same-agent fork of a bypass-armed codex source seeds the bypass option.
+    // (The source label is still dropped server-side; re-selecting here is the
+    // explicit opt-in that re-arms it — never automatic.)
+    if (
+      isCodex &&
+      sameAgentAsSource &&
+      sourceSession?.labels?.["omnigent.codex_native.bypass_sandbox"] === "1"
+    ) {
+      return CODEX_NATIVE_BYPASS_APPROVAL_VALUE;
+    }
     // Match the source's launch args against the mode table (longest args first
     // so "--mode plan" isn't shadowed by an empty-args default).
     const match = [...table]
       .sort((a, b) => b.args.length - a.args.length)
       .find((m) => m.args.length > 0 && m.args.every((arg) => source.includes(arg)));
     return match?.value ?? dflt;
-  }, [sameAgentAsSource, sourceSession, hasApproval, hasCursor, hasAgySkip]);
+  }, [isCodex, sameAgentAsSource, sourceSession, hasApproval, hasCursor, hasAgySkip]);
 
   const [model, setModel] = useState(seededModel);
   const [effort, setEffort] = useState(seededEffort);
@@ -369,8 +392,15 @@ function ForkRunConfig({
             : ["--permission-mode", permission];
       }
     } else if (hasApproval && touched.mode) {
-      value.terminalLaunchArgs =
-        CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === mode)?.args ?? [];
+      if (isCodex && mode === CODEX_NATIVE_BYPASS_APPROVAL_VALUE) {
+        // Bypass is a LABEL, not launch args: clear any preset flags and set
+        // the dedicated opt-in the server turns into the bypass label.
+        value.terminalLaunchArgs = [];
+        value.codexBypassSandbox = true;
+      } else {
+        value.terminalLaunchArgs =
+          CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === mode)?.args ?? [];
+      }
     } else if (hasCursor && touched.mode) {
       value.terminalLaunchArgs = CURSOR_NATIVE_EXEC_MODES.find((m) => m.value === mode)?.args ?? [];
     } else if (hasAgySkip && touched.mode) {
@@ -383,6 +413,7 @@ function ForkRunConfig({
     hasApproval,
     hasCursor,
     hasAgySkip,
+    isCodex,
     model,
     effort,
     permission,
@@ -464,16 +495,39 @@ function ForkRunConfig({
       )}
 
       {hasApproval && (
-        <ConfigRow label="Approval" description="What the agent can do without asking">
-          <DescribedSelect
-            value={mode}
-            onValueChange={changeMode}
-            options={CODEX_NATIVE_APPROVAL_MODES}
-            testId="fork-session-config-approval"
-            ariaLabel="Approval"
-            componentId="fork_session.config.approval"
-          />
-        </ConfigRow>
+        <>
+          <ConfigRow label="Approval" description="What the agent can do without asking">
+            <DescribedSelect
+              value={mode}
+              onValueChange={changeMode}
+              // Codex offers the DANGEROUS full-bypass as a 4th option, exactly
+              // as the new-session dialog does; other approval harnesses list
+              // only the three presets. Selecting it arms bypass on the fork
+              // (a fresh, deliberate opt-in — the source's is always dropped).
+              options={
+                isCodex
+                  ? [...CODEX_NATIVE_APPROVAL_MODES, CODEX_NATIVE_BYPASS_APPROVAL_OPTION]
+                  : CODEX_NATIVE_APPROVAL_MODES
+              }
+              testId="fork-session-config-approval"
+              ariaLabel="Approval"
+              componentId="fork_session.config.approval"
+            />
+          </ConfigRow>
+          {isCodex && mode === CODEX_NATIVE_BYPASS_APPROVAL_VALUE && (
+            <div
+              role="alert"
+              data-testid="fork-session-codex-bypass-banner"
+              className="flex items-start gap-1.5 rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-xs font-medium leading-relaxed text-destructive"
+            >
+              <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                Danger: this fork runs Codex with approvals and the command sandbox disabled. It can
+                edit any file and run any command without asking.
+              </span>
+            </div>
+          )}
+        </>
       )}
 
       {hasCursor && (
@@ -755,14 +809,21 @@ export function ForkSessionForm({
     if (!switching) return nativeCodingAgentForSession(sourceSession)?.harness ?? null;
     return null;
   }, [targetAgent, switching, sourceSession]);
-  // Model / effort carry over within the same provider FAMILY (backend
-  // copy_model_settings), so seed those from same-harness. Launch args
-  // (permission / approval / mode) carry over only on a same-AGENT fork
-  // (backend copy_terminal_launch_args = not switching_agent), so those seed
-  // from same-agent — the two rules differ for a same-harness/different-agent
-  // switch, and matching each keeps the displayed value honest.
-  const sourceHarness = nativeCodingAgentForSession(sourceSession)?.harness ?? null;
-  const sameHarnessAsSource = !switching || targetHarness === sourceHarness;
+  // The two backend carry rules the pickers must mirror so the displayed value
+  // matches what the fork actually does:
+  //
+  //  • Model / effort carry over within the same provider FAMILY (backend
+  //    `copy_model_settings = !switching || _same_provider_family`). Keyed on
+  //    provider family, NOT native-harness identity — otherwise a same-family
+  //    switch (e.g. Claude-SDK → Claude Code, whose SDK source has no native
+  //    wrapper) would seed "Default" while the backend silently inherits the
+  //    source's model/effort. Use each side's EFFECTIVE harness
+  //    (`sourceSession.harness`, non-null for SDK sources) → `harnessFamily`.
+  //  • Launch args (permission / approval / mode) carry over only on a
+  //    same-AGENT fork (`copy_terminal_launch_args = not switching_agent`).
+  const sourceFamily = harnessFamily(sourceSession?.harness);
+  const targetFamily = harnessFamily(targetHarness);
+  const sameFamilyAsSource = !switching || (sourceFamily !== null && sourceFamily === targetFamily);
   const sameAgentAsSource = !switching;
 
   // Default the host = source host (when online) else the first online
@@ -1136,7 +1197,7 @@ export function ForkSessionForm({
             targetHarness={targetHarness}
             targetAgent={targetAgent}
             sourceSession={sourceSession}
-            sameHarnessAsSource={sameHarnessAsSource}
+            sameFamilyAsSource={sameFamilyAsSource}
             sameAgentAsSource={sameAgentAsSource}
             selectedHostId={isCodingSource ? selectedHostId : (sourceHostId ?? null)}
             onChange={setRunConfig}

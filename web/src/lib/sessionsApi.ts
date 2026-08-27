@@ -614,6 +614,8 @@ export async function createBundledSession(
  *   same provider family), while a sent field overrides it. The
  *   permission-/approval-mode selector rides `terminalLaunchArgs` (e.g.
  *   `["--permission-mode", "auto"]`); `[]` clears the source's launch args.
+ *   `codexBypassSandbox: true` (Codex only) arms the dangerous full-bypass on
+ *   the fork — sent only on an explicit, banner-gated pick.
  */
 export async function forkSession(
   sourceId: string,
@@ -624,6 +626,7 @@ export async function forkSession(
     modelOverride?: string;
     reasoningEffort?: string;
     terminalLaunchArgs?: string[];
+    codexBypassSandbox?: boolean;
   },
 ): Promise<Session> {
   const body: {
@@ -633,6 +636,7 @@ export async function forkSession(
     model_override?: string;
     reasoning_effort?: string;
     terminal_launch_args?: string[];
+    codex_bypass_sandbox?: boolean;
   } = {};
   if (title !== undefined) {
     body.title = title;
@@ -651,6 +655,11 @@ export async function forkSession(
   }
   if (config?.terminalLaunchArgs !== undefined) {
     body.terminal_launch_args = config.terminalLaunchArgs;
+  }
+  // Only send the dangerous bypass opt-in when explicitly true; omitting it
+  // otherwise keeps the request minimal and the server default (no bypass).
+  if (config?.codexBypassSandbox) {
+    body.codex_bypass_sandbox = true;
   }
   const res = await authenticatedFetch(`/v1/sessions/${encodeURIComponent(sourceId)}/fork`, {
     method: "POST",
