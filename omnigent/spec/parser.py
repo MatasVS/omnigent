@@ -2302,7 +2302,10 @@ def _discover_skills(
         Pass ``None`` (the default) to fail loud on the first
         error — used for bundled skills that the agent author
         controls.
-    :returns: A sorted list of parsed :class:`SkillSpec` objects.
+    Namespace folders only group skills; they do not alter the skill name
+    declared in ``SKILL.md``.
+
+    :returns: Parsed :class:`SkillSpec` objects in deterministic path order.
         Returns an empty list if *skills_dir* does not exist.
     """
     if not skills_dir.is_dir():
@@ -2320,13 +2323,12 @@ def _discover_skills(
         return []
     skills: list[SkillSpec] = []
     for skill_dir in entries:
-        if not skill_dir.is_dir():
+        if not skill_dir.is_dir() or skill_dir.name.startswith("."):
             continue
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
-            # Namespace folder: group skills one level deeper. Dot-dirs
-            # (``.git`` in a cloned skill pack) stay opaque.
-            if _depth < _SKILL_NAMESPACE_MAX_DEPTH and not skill_dir.name.startswith("."):
+            # Namespace folder: group skills one level deeper.
+            if _depth < _SKILL_NAMESPACE_MAX_DEPTH:
                 skills.extend(_discover_skills(skill_dir, skipped=skipped, _depth=_depth + 1))
             continue
         try:

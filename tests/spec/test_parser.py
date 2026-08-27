@@ -802,6 +802,8 @@ def test_discover_skills_namespace_depth_is_bounded(agent_dir: Path) -> None:
     _write_skill(skills / "ops" / "deploy", "deploy")
     _write_skill(skills / "ops" / "too" / "deep", "deep")
     _write_skill(skills / ".git" / "hidden", "hidden")
+    _write_skill(skills / ".direct-hidden", "direct-hidden")
+    _write_skill(skills / "ops" / ".nested-hidden", "nested-hidden")
 
     assert [s.name for s in parse(agent_dir).skills] == ["deploy"]
 
