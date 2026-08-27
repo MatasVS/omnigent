@@ -119,7 +119,10 @@ import { getOmnigentHostConfig, type OmnigentInteractionStatus } from "@/lib/hos
 import { emitInteractionPhase } from "@/lib/analyticsEmit";
 import { getSessionHost } from "@/lib/sessionHost";
 import { isSystemUserContent } from "@/lib/systemMessage";
-import { isNativeTerminalSession as isNativeTerminalSessionFn, isNativeWrapper } from "@/lib/nativeCodingAgents";
+import {
+  isNativeTerminalSession as isNativeTerminalSessionFn,
+  isNativeWrapper,
+} from "@/lib/nativeCodingAgents";
 
 export interface SendOptions {
   /**
