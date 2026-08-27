@@ -179,8 +179,12 @@ export interface ForkRunConfigValue {
  *   or null for a non-native target (the section renders nothing).
  * @param targetAgent - The `{ name, harness }` the fork will bind, for
  *   capability detection.
- * @param sourceSession - Source session, read to seed a same-harness fork.
- * @param sameHarnessAsSource - Whether the fork keeps the source's harness.
+ * @param sourceSession - Source session, read to seed the pickers.
+ * @param sameHarnessAsSource - Whether the fork keeps the source's harness
+ *   family; seeds model + effort (which the backend carries within a family).
+ * @param sameAgentAsSource - Whether the fork keeps the source's exact agent;
+ *   seeds the launch-arg pickers (permission / approval / mode), which the
+ *   backend carries only on a same-agent fork.
  * @param selectedHostId - Host whose model catalog feeds the model picker; null
  *   leaves it on Default until a host is chosen.
  * @param onChange - Reports the ready-to-send value on every change.
@@ -190,6 +194,7 @@ function ForkRunConfig({
   targetAgent,
   sourceSession,
   sameHarnessAsSource,
+  sameAgentAsSource,
   selectedHostId,
   onChange,
 }: {
@@ -197,6 +202,7 @@ function ForkRunConfig({
   targetAgent: Pick<AvailableAgent, "name" | "harness">;
   sourceSession: Session | null;
   sameHarnessAsSource: boolean;
+  sameAgentAsSource: boolean;
   selectedHostId: string | null;
   onChange: (value: ForkRunConfigValue) => void;
 }) {
@@ -253,17 +259,21 @@ function ForkRunConfig({
       : EFFORT_SELECT_NONE;
   }, [sameHarnessAsSource, sourceSession]);
   const seededPermission = useMemo(() => {
-    if (sameHarnessAsSource) {
+    // Permission mode rides terminal_launch_args, which the backend copies
+    // ONLY on a same-AGENT fork (copy_terminal_launch_args = not switching).
+    // Seed on the same rule (not harness equality) so the displayed mode can't
+    // diverge from what a same-harness/different-agent fork actually launches.
+    if (sameAgentAsSource) {
       return (
         claudePermissionModeFromSession(sourceSession) ?? CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
       );
     }
     return CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE;
-  }, [sameHarnessAsSource, sourceSession]);
+  }, [sameAgentAsSource, sourceSession]);
   const seededModeValue = useMemo(() => {
-    // A same-harness fork of a source launched with a known mode seeds that
-    // mode by matching its launch args; otherwise the harness's default.
-    const source = sameHarnessAsSource ? (sourceSession?.terminalLaunchArgs ?? []) : [];
+    // Same as permission: launch args carry over only on a same-agent fork, so
+    // seed the mode from the source only then; otherwise the harness's default.
+    const source = sameAgentAsSource ? (sourceSession?.terminalLaunchArgs ?? []) : [];
     const table: NativeHarnessMode[] = hasApproval
       ? CODEX_NATIVE_APPROVAL_MODES
       : hasCursor
@@ -282,7 +292,7 @@ function ForkRunConfig({
       .sort((a, b) => b.args.length - a.args.length)
       .find((m) => m.args.length > 0 && m.args.every((arg) => source.includes(arg)));
     return match?.value ?? dflt;
-  }, [sameHarnessAsSource, sourceSession, hasApproval, hasCursor, hasAgySkip]);
+  }, [sameAgentAsSource, sourceSession, hasApproval, hasCursor, hasAgySkip]);
 
   const [model, setModel] = useState(seededModel);
   const [effort, setEffort] = useState(seededEffort);
@@ -745,10 +755,15 @@ export function ForkSessionForm({
     if (!switching) return nativeCodingAgentForSession(sourceSession)?.harness ?? null;
     return null;
   }, [targetAgent, switching, sourceSession]);
-  // Same-harness fork → seed pickers from the source; a switch to a different
-  // native harness → seed the target's own defaults.
+  // Model / effort carry over within the same provider FAMILY (backend
+  // copy_model_settings), so seed those from same-harness. Launch args
+  // (permission / approval / mode) carry over only on a same-AGENT fork
+  // (backend copy_terminal_launch_args = not switching_agent), so those seed
+  // from same-agent — the two rules differ for a same-harness/different-agent
+  // switch, and matching each keeps the displayed value honest.
   const sourceHarness = nativeCodingAgentForSession(sourceSession)?.harness ?? null;
   const sameHarnessAsSource = !switching || targetHarness === sourceHarness;
+  const sameAgentAsSource = !switching;
 
   // Default the host = source host (when online) else the first online
   // host, once hosts have loaded. Only fills an empty slot so an explicit
@@ -1110,13 +1125,19 @@ export function ForkSessionForm({
 
         {/* Run config (native targets only): model / effort / permission mode.
               Seeds from the source on a same-harness fork, else from the target
-              harness's defaults. Renders nothing for a non-native target. */}
+              harness's defaults. Renders nothing for a non-native target.
+              key=agentChoice remounts on any agent switch so the pickers'
+              touched-state and values reset and re-seed from scratch — otherwise
+              a model picked for one harness would leak onto the next and defeat
+              the backend's cross-family reset. */}
         {targetAgent !== null && (
           <ForkRunConfig
+            key={agentChoice}
             targetHarness={targetHarness}
             targetAgent={targetAgent}
             sourceSession={sourceSession}
             sameHarnessAsSource={sameHarnessAsSource}
+            sameAgentAsSource={sameAgentAsSource}
             selectedHostId={isCodingSource ? selectedHostId : (sourceHostId ?? null)}
             onChange={setRunConfig}
           />

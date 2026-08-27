@@ -2286,13 +2286,19 @@ def register_core_routes(
         # labels from the fork; otherwise the copied label would shadow the
         # freshly chosen mode. Only on an explicit pick: an untouched picker
         # sends no launch args and the label carries over as before.
-        dropped_label_keys: frozenset[str] = (
-            frozenset(
-                {_CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY, _CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY}
-            )
-            if launch_args_set
-            else frozenset()
-        )
+        dropped_label_keys_set: set[str] = set()
+        if launch_args_set:
+            dropped_label_keys_set |= {
+                _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY,
+                _CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+            }
+        # The claude-native permission-mode label is Claude-specific; on an
+        # agent switch (which already drops the source's launch args) it would
+        # otherwise ride along as stale metadata that could hydrate a wrong mode
+        # in generic native-wrapper UI state. Drop it whenever the agent changes.
+        if switching_agent:
+            dropped_label_keys_set.add(_CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY)
+        dropped_label_keys: frozenset[str] = frozenset(dropped_label_keys_set)
 
         # When the fork binds a NATIVE target, the native CLI won't replay
         # the copied Omnigent transcript on its own — mark the fork so the
