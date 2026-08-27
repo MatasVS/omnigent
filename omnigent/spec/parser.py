@@ -2274,16 +2274,24 @@ def discover_host_skills(
     return skills
 
 
+# How many grouping levels ``_discover_skills`` descends below ``skills/``:
+# ``skills/<namespace>/<skill>/SKILL.md`` is found, deeper nesting is not.
+_SKILL_NAMESPACE_MAX_DEPTH = 1
+
+
 def _discover_skills(
     skills_dir: Path,
     *,
     skipped: list[str] | None = None,
+    _depth: int = 0,
 ) -> list[SkillSpec]:
     """
     Discover and parse all skills under the ``skills/`` directory.
 
     Each subdirectory containing a ``SKILL.md`` file is parsed via
-    :func:`_parse_skill`.
+    :func:`_parse_skill`. A subdirectory without one is a namespace
+    folder and is scanned one level deeper, so
+    ``skills/<namespace>/<skill>/SKILL.md`` is discovered too.
 
     :param skills_dir: Path to the ``skills/`` directory, e.g.
         ``root / "skills"``.
@@ -2316,6 +2324,10 @@ def _discover_skills(
             continue
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
+            # Namespace folder: group skills one level deeper. Dot-dirs
+            # (``.git`` in a cloned skill pack) stay opaque.
+            if _depth < _SKILL_NAMESPACE_MAX_DEPTH and not skill_dir.name.startswith("."):
+                skills.extend(_discover_skills(skill_dir, skipped=skipped, _depth=_depth + 1))
             continue
         try:
             skill = _parse_skill(skill_md)
