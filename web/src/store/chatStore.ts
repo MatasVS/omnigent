@@ -119,10 +119,7 @@ import { getOmnigentHostConfig, type OmnigentInteractionStatus } from "@/lib/hos
 import { emitInteractionPhase } from "@/lib/analyticsEmit";
 import { getSessionHost } from "@/lib/sessionHost";
 import { isSystemUserContent } from "@/lib/systemMessage";
-import {
-  isNativeTerminalSession as isNativeTerminalSessionFn,
-  isNativeWrapper,
-} from "@/lib/nativeCodingAgents";
+import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
 
 export interface SendOptions {
   /**
@@ -2948,7 +2945,7 @@ function sessionBindingPatch(
     // qwen/goose/cursor/pi/opencode. nativeModelFamilyForSession is non-null
     // only for claude-/codex-native, which keep the composer model label.
     nativeVendorOwnsModel:
-      isNativeWrapper(wrapper) && nativeModelFamilyForSession(session) === null,
+      isNativeTerminalSessionFn(session) && nativeModelFamilyForSession(session) === null,
     boundAgentId: session.agentId,
     boundAgentName: session.agentName,
     llmModel: session.llmModel ?? null,
@@ -2959,7 +2956,7 @@ function sessionBindingPatch(
     costControlModeOverride: session.costControlModeOverride ?? null,
     subagentRoutingOverride: session.subagentRoutingOverride ?? null,
     codexPlanMode: codexPlanModeFromSession(session),
-    claudePermissionMode: isNativeWrapper(wrapper)
+    claudePermissionMode: isNativeTerminalSessionFn(session)
       ? (claudePermissionModeFromSession(session) ?? "")
       : "",
     contextWindow: session.contextWindow ?? null,
